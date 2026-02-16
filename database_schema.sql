@@ -1,0 +1,28 @@
+-- Buat database
+CREATE DATABASE IF NOT EXISTS hrd_absensi;
+USE hrd_absensi;
+
+-- Tabel karyawan
+CREATE TABLE IF NOT EXISTS karyawan (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nrp VARCHAR(20) UNIQUE NOT NULL,
+    nama VARCHAR(100) NOT NULL,
+    face_encoding TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_nrp (nrp)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Tabel absensi
+CREATE TABLE IF NOT EXISTS absensi (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nrp VARCHAR(20) NOT NULL,
+    nama VARCHAR(100) NOT NULL,
+    status VARCHAR(50),
+    waktu DATETIME DEFAULT CURRENT_TIMESTAMP,
+    latitude VARCHAR(50),
+    longitude VARCHAR(50),
+    foto_path VARCHAR(255),
+    FOREIGN KEY (nrp) REFERENCES karyawan(nrp) ON DELETE CASCADE,
+    INDEX idx_waktu (waktu)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
