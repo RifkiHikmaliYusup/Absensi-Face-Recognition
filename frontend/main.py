@@ -152,11 +152,19 @@ def send_absensi_to_api(nrp, image_path, latitude, longitude):
                 return response.json()
             else:
                 print(f"❌ API Error: {response.status_code} - {response.text}")
-                return None
+                return {
+                    'status': response.status_code,
+                    'message': f'Error {response.status_code}',
+                    'data': None
+                }
                 
     except Exception as e:
         print(f"❌ Error send absensi: {e}")
-        return None
+        return {
+            'status': 500,
+            'message': str(e),
+            'data': None
+        }
 
 def send_registration_to_api(nrp, encodings):
     """Mengirim data registrasi wajah ke API"""
@@ -671,7 +679,7 @@ class Sidebar(BoxLayout):
             elif keycode == "escape":
                 active_field.focus = False
 
-# ==================== MAIN CONTENT ====================
+# ==================== MAIN CONTENT (DIPERBAIKI) ====================
 class MainContent(BoxLayout):
     def __init__(self, screen_manager, **kwargs):
         global manual_lat, manual_lon
@@ -1014,9 +1022,12 @@ class MainContent(BoxLayout):
 
         self.camera_display.texture = texture
 
+    # ===== METHOD SEND ABSENSI YANG DIPERBAIKI =====
     def send_absensi(self, nrp, image_path_local):
         """Mengirim data absensi ke API"""
         global manual_lat, manual_lon
+        
+        print(f"📤 Mengirim absensi untuk NRP: {nrp}")
         
         # Kirim ke API
         response = send_absensi_to_api(
@@ -1026,32 +1037,46 @@ class MainContent(BoxLayout):
             longitude=self.manual_lon
         )
         
+        print(f"📥 Response dari API: {response}")
+        
         if response and response.get('status') == 200:
             data = response.get('data', {})
-            status = response.get('message', 'Absensi Berhasil')
-            name = data.get('name', nrp)
-            waktu = data.get('waktu', datetime.now().strftime("%H:%M:%S"))
+            message = response.get('message', 'Absensi Berhasil')
             
-            # Format waktu untuk ditampilkan
+            # Ambil data dari response
+            name = data.get('name', nrp)
+            waktu_full = data.get('waktu', '')
+            
+            # Format waktu untuk tampilan (HH:MM:SS)
             try:
-                waktu_obj = datetime.strptime(waktu, "%Y-%m-%d %H:%M:%S")
-                waktu_display = waktu_obj.strftime("%H:%M:%S")
+                if waktu_full:
+                    waktu_obj = datetime.strptime(waktu_full, "%Y-%m-%d %H:%M:%S")
+                    waktu_display = waktu_obj.strftime("%H:%M:%S")
+                else:
+                    waktu_display = datetime.now().strftime("%H:%M:%S")
             except:
                 waktu_display = datetime.now().strftime("%H:%M:%S")
             
-            # Tampilkan notifikasi
-            if "Check In" in status:
+            # Tentukan status yang akan ditampilkan
+            if "Check In" in message:
+                status_display = "Check In"
                 self.show_checkin_success_dialog()
-            elif "Check Out" in status:
+            elif "Check Out" in message:
+                status_display = "Check Out"
                 self.show_checkout_success_dialog()
+            else:
+                status_display = message
+            
+            print(f"✅ Akan ditambahkan ke tabel: {name} - {status_display} - {waktu_display}")
             
             # Tambahkan ke tabel
-            self.add_to_table(name, status, waktu_display)
-            self.show_absen_notif(name, status, waktu_display)
+            self.add_to_table(name, status_display, waktu_display)
+            self.show_absen_notif(name, status_display, waktu_display)
             
-            print(f"✅ Absensi berhasil: {name} ({nrp}) - {status}")
+            print(f"✅ Absensi berhasil: {name} ({nrp}) - {status_display}")
         else:
-            print(f"❌ Absensi gagal: {nrp}")
+            error_msg = response.get('message', 'Unknown error') if response else 'Tidak ada response'
+            print(f"❌ Absensi gagal: {nrp} - {error_msg}")
 
     def show_absen_notif(self, name, status, waktu):
         if self.active_notif_bar and self.active_notif_bar.parent:
@@ -1083,7 +1108,7 @@ class MainContent(BoxLayout):
         status_chip.add_widget(status_label)
 
         filler = Label(
-            text=f"{name}", 
+            text=f"{name} - {waktu}", 
             theme_text_color="Custom", 
             color=(1, 1, 1, 0.85), 
             halign="left", 
@@ -1494,9 +1519,25 @@ class MainContent(BoxLayout):
                     pagination.ids.drop_item.font_size = "20sp"
                     pagination.ids.drop_item.font_name = "Poppins-Regular" if "Poppins-Regular" in LabelBase._fonts else "Roboto"
 
+    # ===== METHOD TABEL YANG DIPERBAIKI =====
     def create_table(self):
+        """Membuat tabel data absensi"""
         if hasattr(self, 'table'):
             self.remove_widget(self.table)
+            # Hapus referensi tabel
+            delattr(self, 'table')
+
+        # Pastikan data dalam format yang benar
+        row_data = []
+        for item in self.filtered_data:
+            if isinstance(item, (list, tuple)) and len(item) >= 3:
+                row_data.append((
+                    str(item[0]),  # Nama
+                    str(item[1]),  # Status
+                    str(item[2])   # Waktu
+                ))
+        
+        print(f"📊 Membuat tabel dengan {len(row_data)} baris: {row_data}")
 
         self.table = MDDataTable(
             size_hint=(None, None),
@@ -1505,26 +1546,39 @@ class MainContent(BoxLayout):
             pos_hint={"center_x": 0.5, "center_y": 0.5},
             use_pagination=True,
             column_data=[
-                ("[size=20]Nama[/size]", dp(50)),
-                ("[size=20]Status[/size]", dp(70)),
-                ("[size=20]Waktu[/size]", dp(50))
+                ("[size=20][b]Nama[/b][/size]", dp(50)),
+                ("[size=20][b]Status[/b][/size]", dp(70)),
+                ("[size=20][b]Waktu[/b][/size]", dp(50))
             ],
-            row_data=[
-                (name, status, waktu)
-                for name, status, waktu in self.filtered_data
-            ]
+            row_data=row_data
         )
+        
         self.add_widget(self.table)
         Clock.schedule_once(lambda dt: self.update_pagination_font(), 0.1)
 
     def add_to_table(self, name, status, waktu):
-        new_entry = (name, status, waktu)
+        """Menambahkan data absensi ke tabel"""
+        # Validasi data
+        if not name or not status or not waktu:
+            print(f"❌ Data tidak valid: {name}, {status}, {waktu}")
+            return
+        
+        # Buat entry baru
+        new_entry = (str(name), str(status), str(waktu))
+        
+        # Tambahkan ke awal list
         self.original_data.insert(0, new_entry)
         self.filtered_data = self.original_data.copy()
+        
+        print(f"✅ Data ditambahkan ke tabel: {new_entry}")
+        print(f"📊 Total data dalam tabel: {len(self.original_data)}")
+        
+        # Perbarui tabel
         self.create_table()
         self.save_table_data()
 
     def save_table_data(self):
+        """Menyimpan data tabel ke file JSON"""
         data_to_save = {
             "tanggal": datetime.now().strftime("%Y-%m-%d"),
             "absensi": self.original_data
@@ -1532,10 +1586,12 @@ class MainContent(BoxLayout):
         try:
             with open("data_table.json", "w") as file:
                 json.dump(data_to_save, file, indent=4)
-        except:
-            pass
+            print(f"💾 Data tersimpan: {len(self.original_data)} entries")
+        except Exception as e:
+            print(f"❌ Error save table: {e}")
 
     def load_table_data(self):
+        """Memuat data tabel dari file JSON"""
         try:
             with open("data_table.json", "r") as file:
                 data = json.load(file)
@@ -1544,15 +1600,32 @@ class MainContent(BoxLayout):
             today_date = datetime.now().strftime("%Y-%m-%d")
 
             if last_saved_date == today_date:
-                self.original_data = data.get("absensi", [])
+                raw_data = data.get("absensi", [])
+                # Konversi ke tuple jika perlu
+                self.original_data = []
+                for item in raw_data:
+                    if isinstance(item, list):
+                        self.original_data.append(tuple(item))
+                    else:
+                        self.original_data.append(item)
+                
                 self.filtered_data = self.original_data.copy()
+                print(f"📂 Memuat {len(self.original_data)} data dari file")
             else:
+                print("🔄 Hari baru, reset data absensi")
                 self.original_data = []
                 self.filtered_data = []
                 self.save_table_data()
 
             self.create_table()
-        except:
+        except FileNotFoundError:
+            print("📂 File data_table.json tidak ditemukan, membuat baru")
+            self.original_data = []
+            self.filtered_data = []
+            self.create_table()
+            self.save_table_data()
+        except Exception as e:
+            print(f"❌ Error load table data: {e}")
             self.original_data = []
             self.filtered_data = []
             self.create_table()
@@ -1603,6 +1676,7 @@ class MainContent(BoxLayout):
                     file_age = now - os.path.getmtime(file_path)
                     if file_age > 600:  # 10 menit
                         os.remove(file_path)
+                        print(f"🗑 Hapus file capture: {filename}")
         except:
             pass
 
@@ -1615,6 +1689,7 @@ class MainContent(BoxLayout):
                     file_age = now - os.path.getmtime(file_path)
                     if file_age > 300:  # 5 menit
                         os.remove(file_path)
+                        print(f"🗑 Hapus file cache: {filename}")
         except:
             pass
 
