@@ -54,6 +54,7 @@ API_ENDPOINTS = {
     'karyawan': f"{API_BASE_URL}/api/v2/karyawan",
     'karyawan_delete': f"{API_BASE_URL}/api/v2/karyawan",
     'absensi_today': f"{API_BASE_URL}/api/v2/absensi/today",
+    'all_karyawan': f"{API_BASE_URL}/api/v2/all-karyawan",
     'health': f"{API_BASE_URL}/health"
 }
 
@@ -129,7 +130,7 @@ def load_face_data_from_api():
     
     loading_done = True
 
-def send_absensi_to_api(nrp, image_path, latitude, longitude, callback=None):
+def send_absensi_to_api(nrp, image_path, latitude, longitude):
     """Mengirim data absensi ke API"""
     try:
         with open(image_path, "rb") as img_file:
@@ -227,7 +228,7 @@ def get_karyawan_from_api(nrp=None):
         if nrp:
             url = f"{API_ENDPOINTS['karyawan']}/{nrp}"
         else:
-            url = API_ENDPOINTS['face_recognition']
+            url = API_ENDPOINTS['all_karyawan']
         
         response = requests.get(url, timeout=10)
         
@@ -280,10 +281,12 @@ def recognize_face(img, main_content):
         # Kalau tidak ada wajah yang cocok → Unknown
         if not matched_nrps:
             recognized_faces["Unknown"] = (mirrored_x1, y1, time.time())
+            print(f"❓ Wajah tidak dikenal")
         else:
             # Kalau ada wajah cocok → proses NRP
             for matched_nrp in matched_nrps:
                 current_time = time.time()
+                name = face_data.get(matched_nrp, {}).get('name', matched_nrp)
 
                 # Cek apakah ini pertama kali wajah terlihat
                 if matched_nrp not in last_seen:
@@ -293,7 +296,7 @@ def recognize_face(img, main_content):
                     image_path_local = os.path.join(CAPTURE_FOLDER, image_filename)
                     cv2.imwrite(image_path_local, img)
 
-                    print(f"📸 Kirim absensi NRP: {matched_nrp}")
+                    print(f"📸 Kirim absensi - {name} ({matched_nrp})")
                     main_content.send_absensi(matched_nrp, image_path_local)
 
                 else:
@@ -305,7 +308,7 @@ def recognize_face(img, main_content):
                         image_path_local = os.path.join(CAPTURE_FOLDER, image_filename)
                         cv2.imwrite(image_path_local, img)
 
-                        print(f"📸 Kirim ulang absensi NRP: {matched_nrp}")
+                        print(f"📸 Kirim ulang absensi - {name} ({matched_nrp})")
                         main_content.send_absensi(matched_nrp, image_path_local)
 
                 # Simpan posisi wajah yang dikenali
@@ -319,8 +322,9 @@ try:
     LabelBase.register(name="Poppins-Bold", fn_regular=os.path.join(font_dir, "Poppins-Bold.ttf"))
     LabelBase.register(name="Poppins-Regular", fn_regular=os.path.join(font_dir, "Poppins-Regular.ttf"))
     LabelBase.register(name="Poppins-Medium", fn_regular=os.path.join(font_dir, "Poppins-Medium.ttf"))
-except:
-    print("⚠ Font Poppins tidak ditemukan, menggunakan default")
+    print("✅ Font Poppins berhasil dimuat")
+except Exception as e:
+    print(f"⚠ Font Poppins tidak ditemukan: {e}, menggunakan default")
 
 # ==================== CAMERA SINGLETON ====================
 class CameraSingleton:
@@ -333,6 +337,7 @@ class CameraSingleton:
             CameraSingleton._instance = cv2.VideoCapture(0, cv2.CAP_DSHOW)
             if CameraSingleton._instance.isOpened():
                 CameraSingleton._active_screen = screen_name
+                print(f"📷 Kamera diaktifkan untuk {screen_name}")
         return CameraSingleton._instance
 
     @staticmethod
@@ -342,6 +347,7 @@ class CameraSingleton:
                 CameraSingleton._instance.release()
                 CameraSingleton._instance = None
                 CameraSingleton._active_screen = None
+                print(f"📷 Kamera dilepaskan dari {screen_name}")
 
 # ==================== SIDEBAR ====================
 class Sidebar(BoxLayout):
@@ -505,7 +511,7 @@ class Sidebar(BoxLayout):
         search_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(60), spacing=10)
 
         self.search_field = MDTextField(
-            hint_text="Cari NRP...",
+            hint_text="Cari NRP/Nama...",
             size_hint_x=0.8,
             font_size=dp(20)
         )
@@ -513,7 +519,7 @@ class Sidebar(BoxLayout):
         search_button = MDRaisedButton(
             text="Cari",
             size_hint_x=0.2,
-            font_name="Poppins-Bold",
+            font_name="Poppins-Bold" if "Poppins-Bold" in LabelBase._fonts else "Roboto",
             md_bg_color=(0.631, 0.694, 0.909, 1),
             on_release=lambda x: self.filter_nrp_checkboxes(self.search_field, self.search_field.text)
         )
@@ -531,7 +537,8 @@ class Sidebar(BoxLayout):
 
         for karyawan in karyawan_list:
             nrp = karyawan.get('nrp')
-            name = karyawan.get('name', nrp)
+            name = karyawan.get('nama', nrp)
+            status_wajah = karyawan.get('status_wajah', 'Belum')
             
             card = MDCard(
                 orientation='horizontal',
@@ -549,12 +556,12 @@ class Sidebar(BoxLayout):
             )
 
             label = MDLabel(
-                text=f"{nrp} - {name}", 
+                text=f"{nrp} - {name} [{status_wajah}]", 
                 size_hint_x=0.8, 
                 bold=True, 
                 font_style="H6", 
                 valign="middle", 
-                font_name="Poppins-Regular"
+                font_name="Poppins-Regular" if "Poppins-Regular" in LabelBase._fonts else "Roboto"
             )
             checkbox = MDCheckbox(
                 size_hint_x=0.2, 
@@ -573,13 +580,13 @@ class Sidebar(BoxLayout):
             buttons=[
                 MDFlatButton(
                     text="Batal", 
-                    font_name="Poppins-Bold", 
+                    font_name="Poppins-Bold" if "Poppins-Bold" in LabelBase._fonts else "Roboto", 
                     on_release=lambda x: self.dialog_hapus_nrp.dismiss()
                 ),
                 MDRaisedButton(
                     text="Hapus", 
                     md_bg_color=(0.631, 0.694, 0.909, 1), 
-                    font_name="Poppins-Bold", 
+                    font_name="Poppins-Bold" if "Poppins-Bold" in LabelBase._fonts else "Roboto", 
                     on_release=self.delete_selected_nrp
                 )
             ],
@@ -1042,7 +1049,7 @@ class MainContent(BoxLayout):
             self.add_to_table(name, status, waktu_display)
             self.show_absen_notif(name, status, waktu_display)
             
-            print(f"✅ Absensi berhasil: {nrp} - {status}")
+            print(f"✅ Absensi berhasil: {name} ({nrp}) - {status}")
         else:
             print(f"❌ Absensi gagal: {nrp}")
 
@@ -1890,7 +1897,6 @@ class Registration(BoxLayout):
 
                             if len(self.face_encodings_list) >= 15:
                                 self.save_face_data()
-                                self.stop_face_registration(is_cancelled=False)
                                 self.locked_face = None
                                 self.last_seen_time = 0
                                 return
@@ -1919,6 +1925,15 @@ class Registration(BoxLayout):
             
         if len(nrp) != 10:
             self.show_warning_dialog("NRP harus terdiri dari 10 digit!")
+            return
+
+        # Cek apakah NRP ada di database
+        karyawan = get_karyawan_from_api(nrp)
+        
+        if not karyawan:
+            self.show_warning_dialog(
+                f"NRP {nrp} tidak ditemukan dalam database.\nSilahkan tambahkan data karyawan terlebih dahulu."
+            )
             return
 
         self.start_capture_process()
@@ -1968,7 +1983,7 @@ class Registration(BoxLayout):
         )
 
         label = MDLabel(
-            text="Registrasi Telah Berhasil",
+            text="Registrasi Wajah Berhasil",
             halign="center",
             font_style="H5",
             theme_text_color="Primary",
@@ -2062,8 +2077,9 @@ class Registration(BoxLayout):
 
             self.stop_face_registration(is_cancelled=False)
         else:
+            error_msg = response.get('message', 'Gagal menyimpan data ke server') if response else 'Gagal menyimpan data ke server'
             self.show_result_dialog(
-                "Gagal menyimpan data ke server",
+                error_msg,
                 "assets/fail_icon.png",
                 (0.921, 0.364, 0.380, 1)
             )

@@ -26,3 +26,9 @@ CREATE TABLE IF NOT EXISTS absensi (
     FOREIGN KEY (nrp) REFERENCES karyawan(nrp) ON DELETE CASCADE,
     INDEX idx_waktu (waktu)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Contoh data karyawan (untuk testing)
+INSERT INTO karyawan (nrp, nama) VALUES
+('2211038022', 'Rifki Hikmali Yusup'),
+('2301004400', 'Fiko Abdi Gusti'),
+('2211039789', 'Teguh Bagas Mardiansyah');

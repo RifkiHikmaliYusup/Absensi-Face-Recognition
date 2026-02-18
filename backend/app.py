@@ -144,25 +144,27 @@ def register_face():
         
         cursor = connection.cursor(dictionary=True)
         
-        # Cek apakah NRP sudah ada
+        # Cek apakah NRP sudah ada di database
         cursor.execute("SELECT * FROM karyawan WHERE nrp = %s", (nrp,))
         existing = cursor.fetchone()
         
         if existing:
-            # Update data yang sudah ada
+            # Update face_encoding untuk karyawan yang sudah ada
             cursor.execute("""
                 UPDATE karyawan 
                 SET face_encoding = %s, updated_at = NOW() 
                 WHERE nrp = %s
             """, (face_encoding_json, nrp))
             nama = existing['nama']
+            message = 'Face registration updated successfully'
         else:
-            # Insert data baru
-            nama = f"Karyawan {nrp}"
-            cursor.execute("""
-                INSERT INTO karyawan (nrp, nama, face_encoding) 
-                VALUES (%s, %s, %s)
-            """, (nrp, nama, face_encoding_json))
+            # Jika NRP tidak ditemukan, registrasi gagal karena harus input manual dulu
+            cursor.close()
+            connection.close()
+            return jsonify({
+                'status': 404, 
+                'message': 'NRP tidak ditemukan dalam database. Silahkan tambahkan data karyawan terlebih dahulu.'
+            }), 404
         
         connection.commit()
         cursor.close()
@@ -170,7 +172,7 @@ def register_face():
         
         return jsonify({
             'status': 200,
-            'message': 'Face registration successful',
+            'message': message,
             'data': {
                 'nrp': nrp,
                 'name': nama
@@ -234,7 +236,7 @@ def absen():
         
         # Tentukan status
         if not absensi_terakhir:
-            status = "Check In Berhasil"
+            status = "Check In"
         else:
             # Cek apakah sudah check out
             waktu_absensi = absensi_terakhir['waktu']
@@ -243,9 +245,9 @@ def absen():
             
             # Jika absensi terakhir adalah check in dan sudah lewat 4 jam
             if "Check In" in absensi_terakhir['status'] and (datetime.now() - waktu_absensi).seconds > 14400:
-                status = "Check Out Berhasil"
+                status = "Check Out"
             else:
-                status = f"Sudah {absensi_terakhir['status'].lower()}"
+                status = f"Sudah {absensi_terakhir['status']}"
         
         # Simpan data absensi
         cursor.execute("""
@@ -272,7 +274,7 @@ def absen():
         
         return jsonify({
             'status': 200,
-            'message': status,
+            'message': f'{status} Berhasil',
             'data': {
                 'nrp': nrp,
                 'name': nama,
@@ -538,6 +540,37 @@ def update_karyawan(nrp):
     except Exception as e:
         return jsonify({'status': 500, 'message': str(e)}), 500
 
+# API 11: Get all karyawan (untuk manajemen)
+@app.route('/api/v2/all-karyawan', methods=['GET'])
+def get_all_karyawan_management():
+    """Mengambil semua data karyawan untuk keperluan manajemen"""
+    try:
+        connection = get_db_connection()
+        if not connection:
+            return jsonify({'status': 500, 'message': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT nrp, nama, 
+                   CASE WHEN face_encoding IS NOT NULL THEN 'Terdaftar' ELSE 'Belum' END as status_wajah,
+                   created_at
+            FROM karyawan 
+            ORDER BY nrp
+        """)
+        karyawan_list = cursor.fetchall()
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({
+            'status': 200,
+            'message': 'Success',
+            'data': karyawan_list
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'status': 500, 'message': str(e)}), 500
+
 # ==================== RUN SERVER ====================
 if __name__ == '__main__':
     print("=" * 50)
@@ -558,6 +591,7 @@ if __name__ == '__main__':
     print("   DELETE /api/v2/karyawan/<nrp>  - Delete single")
     print("   GET    /api/v2/absensi/today   - Get today's absensi")
     print("   GET    /api/v2/absensi/<nrp>   - Get absensi by NRP")
+    print("   GET    /api/v2/all-karyawan    - Get all karyawan for management")
     print("\n" + "=" * 50)
     print("✅ Server running on http://localhost:5000")
     print("=" * 50)
