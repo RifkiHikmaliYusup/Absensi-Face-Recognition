@@ -43,9 +43,7 @@ import time
 import threading
 
 # ==================== KONFIGURASI API ====================
-# Ganti dengan IP address komputer backend jika akses dari device lain
 API_BASE_URL = "http://localhost:5000"  # Untuk local
-# API_BASE_URL = "http://192.168.1.10:5000"  # Untuk akses dari HP/tablet
 
 API_ENDPOINTS = {
     'face_recognition': f"{API_BASE_URL}/api/v2/face-recognition",
@@ -59,15 +57,12 @@ API_ENDPOINTS = {
 }
 
 # ==================== KONFIGURASI APLIKASI ====================
-# Folder untuk menyimpan gambar capture sementara
 CAPTURE_FOLDER = "./captures"
 os.makedirs(CAPTURE_FOLDER, exist_ok=True)
 
-# Folder cache untuk peta
 CACHE_FOLDER = "./cache"
 os.makedirs(CACHE_FOLDER, exist_ok=True)
 
-# Window size
 Window.fullscreen = True
 Window.size = (1080, 1920)
 
@@ -84,12 +79,14 @@ last_seen = {}
 face_data = {}
 loading_done = False
 recognized_faces = {}
-manual_lat = -6.866641  # Default latitude (Cimahi)
-manual_lon = 107.5347632  # Default longitude (Cimahi)
+manual_lat = -6.866641
+manual_lon = 107.5347632
+
+# Dictionary untuk menyimpan status absensi hari ini (nrp: status)
+today_attendance_status = {}
 
 # ==================== FUNGSI API ====================
 def check_api_health():
-    """Cek koneksi ke backend API"""
     try:
         response = requests.get(API_ENDPOINTS['health'], timeout=3)
         return response.status_code == 200
@@ -97,7 +94,6 @@ def check_api_health():
         return False
 
 def load_face_data_from_api():
-    """Load semua data wajah dari API"""
     global face_data, loading_done
     face_data.clear()
     
@@ -110,7 +106,6 @@ def load_face_data_from_api():
                 for entry in data.get('data', []):
                     if 'nrp' in entry and 'face_encoding' in entry:
                         try:
-                            # Parse JSON string ke list
                             encodings = json.loads(entry['face_encoding'])
                             face_data[entry['nrp']] = {
                                 'encodings': np.array(encodings),
@@ -131,7 +126,6 @@ def load_face_data_from_api():
     loading_done = True
 
 def send_absensi_to_api(nrp, image_path, latitude, longitude):
-    """Mengirim data absensi ke API"""
     try:
         with open(image_path, "rb") as img_file:
             files = {"foto": (os.path.basename(image_path), img_file, "image/jpeg")}
@@ -152,22 +146,13 @@ def send_absensi_to_api(nrp, image_path, latitude, longitude):
                 return response.json()
             else:
                 print(f"❌ API Error: {response.status_code} - {response.text}")
-                return {
-                    'status': response.status_code,
-                    'message': f'Error {response.status_code}',
-                    'data': None
-                }
+                return None
                 
     except Exception as e:
         print(f"❌ Error send absensi: {e}")
-        return {
-            'status': 500,
-            'message': str(e),
-            'data': None
-        }
+        return None
 
 def send_registration_to_api(nrp, encodings):
-    """Mengirim data registrasi wajah ke API"""
     try:
         data = [{
             "nrp": str(nrp),
@@ -194,7 +179,6 @@ def send_registration_to_api(nrp, encodings):
         return None
 
 def delete_karyawan_from_api(nrp_list):
-    """Menghapus data karyawan dari API"""
     try:
         data = {"nrp_list": nrp_list}
         headers = {"Content-Type": "application/json"}
@@ -215,23 +199,7 @@ def delete_karyawan_from_api(nrp_list):
         print(f"❌ Error delete karyawan: {e}")
         return None
 
-def get_absensi_today_from_api():
-    """Mengambil data absensi hari ini dari API"""
-    try:
-        response = requests.get(API_ENDPOINTS['absensi_today'], timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('data', [])
-        else:
-            return []
-            
-    except Exception as e:
-        print(f"❌ Error get absensi: {e}")
-        return []
-
 def get_karyawan_from_api(nrp=None):
-    """Mengambil data karyawan dari API"""
     try:
         if nrp:
             url = f"{API_ENDPOINTS['karyawan']}/{nrp}"
@@ -250,6 +218,36 @@ def get_karyawan_from_api(nrp=None):
         print(f"❌ Error get karyawan: {e}")
         return [] if not nrp else None
 
+def get_absensi_today_from_api():
+    """Mengambil data absensi hari ini dari API untuk cek status"""
+    try:
+        response = requests.get(API_ENDPOINTS['absensi_today'], timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('data', [])
+        else:
+            return []
+            
+    except Exception as e:
+        print(f"❌ Error get absensi: {e}")
+        return []
+
+def load_today_attendance_status():
+    """Memuat status absensi hari ini dari API"""
+    global today_attendance_status
+    today_attendance_status.clear()
+    
+    absensi_list = get_absensi_today_from_api()
+    for absensi in absensi_list:
+        nrp = absensi.get('nrp')
+        status = absensi.get('status')
+        if nrp and status:
+            # Simpan status terakhir untuk NRP ini
+            today_attendance_status[nrp] = status
+    
+    print(f"📊 Status absensi hari ini: {today_attendance_status}")
+
 # ==================== FUNGSI LAINNYA ====================
 def is_internet_available():
     try:
@@ -262,10 +260,8 @@ def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 def recognize_face(img, main_content):
-    """Fungsi untuk mengenali wajah"""
-    global recognized_faces, face_data, last_seen
+    global recognized_faces, face_data, last_seen, today_attendance_status
     
-    # Balik frame secara horizontal
     img = cv2.flip(img, 1)
     faces = app.get(img)
 
@@ -279,47 +275,54 @@ def recognize_face(img, main_content):
 
         matched_nrps = []
 
-        # Bandingkan wajah dengan data dari API
         for nrp, face_info in face_data.items():
             stored_encoding = face_info['encodings']
             similarity = cosine_similarity(face_encoding, stored_encoding)
             if similarity > 0.7:
                 matched_nrps.append(nrp)
 
-        # Kalau tidak ada wajah yang cocok → Unknown
         if not matched_nrps:
             recognized_faces["Unknown"] = (mirrored_x1, y1, time.time())
             print(f"❓ Wajah tidak dikenal")
         else:
-            # Kalau ada wajah cocok → proses NRP
             for matched_nrp in matched_nrps:
                 current_time = time.time()
                 name = face_data.get(matched_nrp, {}).get('name', matched_nrp)
 
-                # Cek apakah ini pertama kali wajah terlihat
-                if matched_nrp not in last_seen:
-                    last_seen[matched_nrp] = current_time
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    image_filename = f"{matched_nrp}_{timestamp}.jpg"
-                    image_path_local = os.path.join(CAPTURE_FOLDER, image_filename)
-                    cv2.imwrite(image_path_local, img)
-
-                    print(f"📸 Kirim absensi - {name} ({matched_nrp})")
-                    main_content.send_absensi(matched_nrp, image_path_local)
-
-                else:
-                    # Kalau sudah pernah terlihat, kirim lagi hanya setelah 5 detik
-                    if current_time - last_seen[matched_nrp] >= 5:
+                # Cek status absensi hari ini
+                current_status = today_attendance_status.get(matched_nrp)
+                
+                # Logika: Jika sudah check in, jangan check in lagi, tunggu check out
+                if current_status == "Check In":
+                    # Cek apakah sudah lewat 4 jam untuk check out
+                    # Ini akan ditangani di backend, kita hanya mencegah pengiriman berulang
+                    if matched_nrp not in last_seen or (current_time - last_seen.get(matched_nrp, 0) > 300):
+                        # Kirim untuk check out (backend yang akan menentukan)
                         last_seen[matched_nrp] = current_time
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         image_filename = f"{matched_nrp}_{timestamp}.jpg"
                         image_path_local = os.path.join(CAPTURE_FOLDER, image_filename)
                         cv2.imwrite(image_path_local, img)
 
-                        print(f"📸 Kirim ulang absensi - {name} ({matched_nrp})")
+                        print(f"📸 Mencoba check out - {name} ({matched_nrp})")
                         main_content.send_absensi(matched_nrp, image_path_local)
+                
+                elif not current_status:
+                    # Belum absen hari ini, lakukan check in
+                    if matched_nrp not in last_seen or (current_time - last_seen.get(matched_nrp, 0) > 300):
+                        last_seen[matched_nrp] = current_time
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        image_filename = f"{matched_nrp}_{timestamp}.jpg"
+                        image_path_local = os.path.join(CAPTURE_FOLDER, image_filename)
+                        cv2.imwrite(image_path_local, img)
 
-                # Simpan posisi wajah yang dikenali
+                        print(f"📸 Check in - {name} ({matched_nrp})")
+                        main_content.send_absensi(matched_nrp, image_path_local)
+                
+                else:
+                    # Sudah check out atau status lain, jangan kirim lagi
+                    print(f"⏭️ {name} sudah {current_status}, tidak mengirim ulang")
+
                 recognized_faces[matched_nrp] = (mirrored_x1, y1, time.time())
 
 # ==================== FONT ====================
@@ -375,7 +378,6 @@ class Sidebar(BoxLayout):
 
         self.bind(size=self.update_rect, pos=self.update_rect)
 
-        # Brand Logo
         self.brand_logo = Image(
             source="assets/logoHIGAIS2.png",
             size_hint=(None, None),
@@ -388,7 +390,6 @@ class Sidebar(BoxLayout):
 
         self.add_widget(BoxLayout(size_hint_y=None, height=dp(30)))
 
-        # Menu 1: Camera (Absensi)
         self.profile_logo = Image(
             source="assets/icon_camera.png",
             size_hint=(None, None),
@@ -400,7 +401,6 @@ class Sidebar(BoxLayout):
         self.profile_logo.bind(on_touch_down=self.on_camera_logo_pressed)
         self.add_widget(self.profile_logo)
 
-        # Menu 2: Register
         self.register_logo = Image(
             source="assets/profile_icon.png",
             size_hint=(None, None),
@@ -412,7 +412,6 @@ class Sidebar(BoxLayout):
         self.register_logo.bind(on_touch_down=self.on_register_logo_pressed)
         self.add_widget(self.register_logo)
 
-        # Menu 3: Remove
         self.remove_logo = Image(
             source="assets/remove_file.png",
             size_hint=(None, None),
@@ -424,7 +423,6 @@ class Sidebar(BoxLayout):
         self.remove_logo.bind(on_touch_down=self.delete_files)
         self.add_widget(self.remove_logo)
 
-        # FR Text
         self.fr_text = Image(
             source="assets/FR_TEXT.png",
             size_hint=(None, None),
@@ -494,7 +492,6 @@ class Sidebar(BoxLayout):
         
         self.animate_button_click(instance)
         
-        # Load data karyawan dari API
         karyawan_list = get_karyawan_from_api()
         
         if not karyawan_list:
@@ -621,10 +618,8 @@ class Sidebar(BoxLayout):
         if not selected_nrp:
             return
 
-        # Hapus dari API
         result = delete_karyawan_from_api(selected_nrp)
         
-        # Reload data
         thread = threading.Thread(target=load_face_data_from_api)
         thread.start()
 
@@ -682,7 +677,7 @@ class Sidebar(BoxLayout):
 # ==================== MAIN CONTENT (DIPERBAIKI) ====================
 class MainContent(BoxLayout):
     def __init__(self, screen_manager, **kwargs):
-        global manual_lat, manual_lon
+        global manual_lat, manual_lon, today_attendance_status
         
         super().__init__(**kwargs)
         self.screen_manager = screen_manager
@@ -693,18 +688,16 @@ class MainContent(BoxLayout):
         self.recognition_interval = 0.5
         self.recognition_thread_running = False
         
-        # Lokasi manual
         self.manual_lat = manual_lat
         self.manual_lon = manual_lon
         
-        # Schedule
         Clock.schedule_interval(self.hapus_file_capture, 600)
         Clock.schedule_interval(self.hapus_file_cache, 300)
         Clock.schedule_interval(self.update_time, 1)
         Clock.schedule_interval(self.check_internet_connection, 10)
         Clock.schedule_interval(self.check_new_day, 60)
+        Clock.schedule_interval(self.refresh_attendance_status, 30)  # Refresh status setiap 30 detik
         
-        # Set locale
         try:
             locale.setlocale(locale.LC_TIME, "id_ID.UTF-8")
         except:
@@ -718,7 +711,6 @@ class MainContent(BoxLayout):
             self.rect = Rectangle(size=self.size, pos=self.pos)
         self.bind(size=self.update_rect, pos=self.update_rect)
 
-        # ========== UI LAYOUT ==========
         root_layout = BoxLayout(orientation="vertical", spacing=10, padding=[10, 10, 10, 10])
         self.root_layout = root_layout
 
@@ -807,7 +799,6 @@ class MainContent(BoxLayout):
         self.top_info_container.add_widget(self.time_chip)
         self.camera_layout.add_widget(self.top_info_container)
 
-        # Instruction
         self.instruction_container = MDBoxLayout(
             size_hint=(None, None),
             size=(dp(520), dp(44)),
@@ -828,10 +819,8 @@ class MainContent(BoxLayout):
 
         root_layout.add_widget(self.camera_layout)
 
-        # Notifikasi bar
         self.active_notif_bar = None
 
-        # Filter
         self.add_widget(root_layout)
         filter_layout = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(84), padding=(10, 10), spacing=10)
         
@@ -868,21 +857,17 @@ class MainContent(BoxLayout):
         filter_layout.add_widget(self.time_filter_btn)
         self.add_widget(filter_layout)
 
-        # Tabel
         self.original_data = []
         self.filtered_data = []
         self.load_table_data()
         
-        # Keyboard
         self.vkeyboard = None
         self.name_filter.bind(focus=self.show_keyboard)
         self.lat_input = None
         self.lon_input = None
         
-        # Update lokasi
         Clock.schedule_once(lambda dt: self.update_location(lat=self.manual_lat, lon=self.manual_lon), 2)
 
-    # ========== FUNGSI UTAMA ==========
     def get_current_time(self):
         return datetime.now().strftime("%H:%M:%S")
 
@@ -914,9 +899,11 @@ class MainContent(BoxLayout):
         self.rect.pos = self.pos
 
     def on_enter(self):
-        """Aktifkan kamera"""
         thread = threading.Thread(target=load_face_data_from_api)
         thread.start()
+        
+        # Load status absensi hari ini
+        threading.Thread(target=load_today_attendance_status).start()
 
         self.cap = CameraSingleton.get_instance(screen_name="MainContent")
         if self.cap is None or not self.cap.isOpened():
@@ -930,6 +917,10 @@ class MainContent(BoxLayout):
     def on_leave(self):
         Clock.unschedule(self.update_camera)
         CameraSingleton.release(screen_name="MainContent")
+
+    def refresh_attendance_status(self, dt):
+        """Refresh status absensi setiap 30 detik"""
+        threading.Thread(target=load_today_attendance_status).start()
 
     def update_camera(self, dt):
         global recognized_faces, face_data
@@ -945,7 +936,6 @@ class MainContent(BoxLayout):
         frame_width = img.shape[1]
         img_for_detection = cv2.flip(img, 1)
         
-        # YOLO detection
         results = model(img, stream=True, verbose=False)
 
         for r in results:
@@ -1004,7 +994,6 @@ class MainContent(BoxLayout):
                                 colorR=color
                             )
 
-        # Crop untuk portrait
         h, w, _ = img.shape
         x_center, y_center = w // 2, h // 2
         crop_w, crop_h = 960, 1280
@@ -1014,7 +1003,6 @@ class MainContent(BoxLayout):
         y2 = min(h, y_center + crop_h // 2)
         img = img[y1:y2, x1:x2]
 
-        # Convert to texture
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = cv2.flip(img, 0)
         texture = Texture.create(size=(img.shape[1], img.shape[0]), colorfmt='rgb')
@@ -1022,10 +1010,9 @@ class MainContent(BoxLayout):
 
         self.camera_display.texture = texture
 
-    # ===== METHOD SEND ABSENSI YANG DIPERBAIKI =====
     def send_absensi(self, nrp, image_path_local):
         """Mengirim data absensi ke API"""
-        global manual_lat, manual_lon
+        global manual_lat, manual_lon, today_attendance_status
         
         print(f"📤 Mengirim absensi untuk NRP: {nrp}")
         
@@ -1043,35 +1030,39 @@ class MainContent(BoxLayout):
             data = response.get('data', {})
             message = response.get('message', 'Absensi Berhasil')
             
-            # Ambil data dari response
             name = data.get('name', nrp)
             waktu_full = data.get('waktu', '')
             
-            # Format waktu untuk tampilan (HH:MM:SS)
+            # Update status absensi hari ini
+            if "Check In" in message:
+                today_attendance_status[nrp] = "Check In"
+            elif "Check Out" in message:
+                today_attendance_status[nrp] = "Check Out"
+            
             try:
                 if waktu_full:
                     waktu_obj = datetime.strptime(waktu_full, "%Y-%m-%d %H:%M:%S")
-                    waktu_display = waktu_obj.strftime("%H:%M:%S")
+                    # Format dengan tanggal dan jam
+                    waktu_display = waktu_obj.strftime("%d/%m/%Y %H:%M:%S")
                 else:
-                    waktu_display = datetime.now().strftime("%H:%M:%S")
+                    waktu_display = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             except:
-                waktu_display = datetime.now().strftime("%H:%M:%S")
+                waktu_display = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             
             # Tentukan status yang akan ditampilkan
             if "Check In" in message:
                 status_display = "Check In"
-                self.show_checkin_success_dialog()
+                Clock.schedule_once(lambda dt: self.show_checkin_success_dialog())
             elif "Check Out" in message:
                 status_display = "Check Out"
-                self.show_checkout_success_dialog()
+                Clock.schedule_once(lambda dt: self.show_checkout_success_dialog())
             else:
                 status_display = message
             
             print(f"✅ Akan ditambahkan ke tabel: {name} - {status_display} - {waktu_display}")
             
-            # Tambahkan ke tabel
-            self.add_to_table(name, status_display, waktu_display)
-            self.show_absen_notif(name, status_display, waktu_display)
+            Clock.schedule_once(lambda dt: self.add_to_table(name, status_display, waktu_display))
+            Clock.schedule_once(lambda dt: self.show_absen_notif(name, status_display, waktu_display))
             
             print(f"✅ Absensi berhasil: {name} ({nrp}) - {status_display}")
         else:
@@ -1109,12 +1100,12 @@ class MainContent(BoxLayout):
 
         filler = Label(
             text=f"{name} - {waktu}", 
-            theme_text_color="Custom", 
             color=(1, 1, 1, 0.85), 
             halign="left", 
             font_size="18sp", 
             font_name="Poppins-Regular" if "Poppins-Regular" in LabelBase._fonts else "Roboto"
         )
+        
         close_btn = MDRaisedButton(
             text="Tutup",
             md_bg_color=(0.12, 0.20, 0.36, 1),
@@ -1519,22 +1510,18 @@ class MainContent(BoxLayout):
                     pagination.ids.drop_item.font_size = "20sp"
                     pagination.ids.drop_item.font_name = "Poppins-Regular" if "Poppins-Regular" in LabelBase._fonts else "Roboto"
 
-    # ===== METHOD TABEL YANG DIPERBAIKI =====
     def create_table(self):
-        """Membuat tabel data absensi"""
         if hasattr(self, 'table'):
             self.remove_widget(self.table)
-            # Hapus referensi tabel
             delattr(self, 'table')
 
-        # Pastikan data dalam format yang benar
         row_data = []
         for item in self.filtered_data:
             if isinstance(item, (list, tuple)) and len(item) >= 3:
                 row_data.append((
-                    str(item[0]),  # Nama
-                    str(item[1]),  # Status
-                    str(item[2])   # Waktu
+                    str(item[0]),
+                    str(item[1]),
+                    str(item[2])
                 ))
         
         print(f"📊 Membuat tabel dengan {len(row_data)} baris: {row_data}")
@@ -1557,28 +1544,22 @@ class MainContent(BoxLayout):
         Clock.schedule_once(lambda dt: self.update_pagination_font(), 0.1)
 
     def add_to_table(self, name, status, waktu):
-        """Menambahkan data absensi ke tabel"""
-        # Validasi data
         if not name or not status or not waktu:
             print(f"❌ Data tidak valid: {name}, {status}, {waktu}")
             return
         
-        # Buat entry baru
         new_entry = (str(name), str(status), str(waktu))
         
-        # Tambahkan ke awal list
         self.original_data.insert(0, new_entry)
         self.filtered_data = self.original_data.copy()
         
         print(f"✅ Data ditambahkan ke tabel: {new_entry}")
         print(f"📊 Total data dalam tabel: {len(self.original_data)}")
         
-        # Perbarui tabel
         self.create_table()
         self.save_table_data()
 
     def save_table_data(self):
-        """Menyimpan data tabel ke file JSON"""
         data_to_save = {
             "tanggal": datetime.now().strftime("%Y-%m-%d"),
             "absensi": self.original_data
@@ -1591,7 +1572,6 @@ class MainContent(BoxLayout):
             print(f"❌ Error save table: {e}")
 
     def load_table_data(self):
-        """Memuat data tabel dari file JSON"""
         try:
             with open("data_table.json", "r") as file:
                 data = json.load(file)
@@ -1601,7 +1581,6 @@ class MainContent(BoxLayout):
 
             if last_saved_date == today_date:
                 raw_data = data.get("absensi", [])
-                # Konversi ke tuple jika perlu
                 self.original_data = []
                 for item in raw_data:
                     if isinstance(item, list):
@@ -1653,8 +1632,10 @@ class MainContent(BoxLayout):
             return True
 
         try:
+            # Extract time part from datetime string (dd/mm/yyyy HH:MM:SS)
+            time_part = time_str.split(' ')[1] if ' ' in time_str else time_str
             start_time_str, end_time_str = time_range.split(" - ")
-            time_obj = datetime.strptime(time_str, "%H:%M:%S").time()
+            time_obj = datetime.strptime(time_part, "%H:%M:%S").time()
             start_time_obj = datetime.strptime(start_time_str, "%H:%M").time()
             end_time_obj = datetime.strptime(end_time_str, "%H:%M").time()
             return start_time_obj <= time_obj <= end_time_obj
@@ -1666,6 +1647,9 @@ class MainContent(BoxLayout):
         if today != getattr(self, 'last_checked_date', ''):
             self.last_checked_date = today
             self.load_table_data()
+            # Reset status absensi untuk hari baru
+            global today_attendance_status
+            today_attendance_status.clear()
 
     def hapus_file_capture(self, *args):
         now = time.time()
@@ -1674,7 +1658,7 @@ class MainContent(BoxLayout):
                 file_path = os.path.join(CAPTURE_FOLDER, filename)
                 if os.path.isfile(file_path):
                     file_age = now - os.path.getmtime(file_path)
-                    if file_age > 600:  # 10 menit
+                    if file_age > 600:
                         os.remove(file_path)
                         print(f"🗑 Hapus file capture: {filename}")
         except:
@@ -1687,14 +1671,15 @@ class MainContent(BoxLayout):
                 file_path = os.path.join(CACHE_FOLDER, filename)
                 if os.path.isfile(file_path):
                     file_age = now - os.path.getmtime(file_path)
-                    if file_age > 300:  # 5 menit
+                    if file_age > 300:
                         os.remove(file_path)
                         print(f"🗑 Hapus file cache: {filename}")
         except:
             pass
 
-# ==================== REGISTRATION ====================
+# ==================== REGISTRATION (SAMA SEPERTI SEBELUMNYA) ====================
 class Registration(BoxLayout):
+    # ... (kode Registration tetap sama seperti sebelumnya) ...
     def __init__(self, screen_manager, **kwargs):
         super().__init__(**kwargs)
         self.screen_manager = screen_manager
@@ -1707,11 +1692,9 @@ class Registration(BoxLayout):
 
         self.bind(size=self.update_rect, pos=self.update_rect)
 
-        # ROOT LAYOUT
         root_layout = BoxLayout(orientation="vertical", spacing=10, padding=[10, 10, 10, 10])
         self.root_layout = root_layout
 
-        # HEADER
         header_layout = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(80), padding=[10, 0, 10, 0])
         self.header_title = Label(
             text="Registration Form",
@@ -1735,7 +1718,6 @@ class Registration(BoxLayout):
         header_layout.add_widget(self.subtitle_label)
         root_layout.add_widget(header_layout)
 
-        # KAMERA
         self.camera_layout = RelativeLayout(size_hint=(1, 1), pos_hint={"center_x": 0.5, "top": 1})
         self.camera_card = MDCard(
             size_hint=(1, 1), 
@@ -1748,7 +1730,6 @@ class Registration(BoxLayout):
         self.camera_card.add_widget(self.camera_display)
         self.camera_layout.add_widget(self.camera_card)
 
-        # Overlay progress
         self.top_info_container = MDBoxLayout(
             size_hint=(None, None),
             size=(dp(460), dp(48)),
@@ -1795,7 +1776,6 @@ class Registration(BoxLayout):
         self.top_info_container.add_widget(self.status_chip)
         self.camera_layout.add_widget(self.top_info_container)
 
-        # Instruction
         self.instruction_container = MDBoxLayout(
             size_hint=(None, None),
             size=(dp(520), dp(44)),
@@ -1816,7 +1796,6 @@ class Registration(BoxLayout):
 
         root_layout.add_widget(self.camera_layout)
 
-        # INPUT FORM
         self.input_layout = BoxLayout(
             orientation="horizontal", 
             size_hint=(1, None), 
@@ -1909,7 +1888,6 @@ class Registration(BoxLayout):
 
         frame = cv2.flip(frame, 1)
         
-        # Crop frame
         h, w, _ = frame.shape
         x_center, y_center = w // 2, h // 2
         crop_w, crop_h = 960, 1280
@@ -1985,7 +1963,6 @@ class Registration(BoxLayout):
         if face_detected:
             self.last_seen_time = current_time
 
-        # Convert to texture
         buf = cv2.flip(frame_cropped, 0).tobytes()
         texture = Texture.create(size=(frame_cropped.shape[1], frame_cropped.shape[0]), colorfmt='bgr')
         texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
@@ -2002,7 +1979,6 @@ class Registration(BoxLayout):
             self.show_warning_dialog("NRP harus terdiri dari 10 digit!")
             return
 
-        # Cek apakah NRP ada di database
         karyawan = get_karyawan_from_api(nrp)
         
         if not karyawan:
@@ -2037,7 +2013,7 @@ class Registration(BoxLayout):
             self.instruction_main.text = "Fokuskan Wajah Anda Pada Layar untuk Registrasi"
         else:
             self.update_progress_bar(100)
-            self.show_registration_success_dialog()
+            Clock.schedule_once(lambda dt: self.show_registration_success_dialog())
             self.instruction_main.text = "Fokuskan Wajah Anda Pada Layar untuk Registrasi"
 
     def show_registration_success_dialog(self):
@@ -2142,11 +2118,9 @@ class Registration(BoxLayout):
 
         mean_encoding = np.mean(self.face_encodings_list, axis=0).tolist()
 
-        # Kirim ke API
         response = send_registration_to_api(nrp, mean_encoding)
 
         if response and response.get('status') == 200:
-            # Reload data wajah
             thread = threading.Thread(target=load_face_data_from_api)
             thread.start()
 
@@ -2247,8 +2221,8 @@ class myapp(MDApp):
 
         sm.current = "main"
         
-        # Load data wajah dari API saat startup
         threading.Thread(target=load_face_data_from_api).start()
+        threading.Thread(target=load_today_attendance_status).start()
         
         return sm
 
